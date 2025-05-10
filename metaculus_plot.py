@@ -49,14 +49,12 @@ fig = px.scatter(
     y='umap_2',
     color='main_cat',
     opacity=0.7,
-    color_discrete_sequence=px.colors.qualitative.T10
+    color_discrete_sequence=px.colors.qualitative.T10,
+    custom_data=['title', 'main_cat']
 )
 
-# Custom hover: show title and category only, no axis numbers or variable labels
-custom = data_emb[['title', 'main_cat']].to_numpy()
 fig.update_traces(
-    customdata=custom,
-    hovertemplate="%{customdata[0]}"
+    hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<extra></extra>"
 )
 
 fig.update_layout(
@@ -75,4 +73,4 @@ fig.update_layout(
     legend_title_text='Category'
 )
 fig.write_html("metaculus_topics.html", full_html=True, include_plotlyjs="cdn")
-fig.show() 
+fig.show()
