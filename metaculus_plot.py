@@ -48,9 +48,15 @@ fig = px.scatter(
     x='umap_1',
     y='umap_2',
     color='main_cat',
-    hover_data=['title'],
     opacity=0.7,
     color_discrete_sequence=px.colors.qualitative.T10
+)
+
+# Custom hover: show title and category only, no axis numbers or variable labels
+custom = data_emb[['title', 'main_cat']].to_numpy()
+fig.update_traces(
+    customdata=custom,
+    hovertemplate="%{customdata[0]}"
 )
 
 fig.update_layout(
