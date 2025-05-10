@@ -21,7 +21,7 @@ fig = topic_model.visualize_documents(docs, reduced_embeddings=reduced_embedding
 
 # --- Styling for Helvetica, white bg, no axes / ticks / grid ---
 fig.update_layout(
-    font=dict(family="Helvetica", size=12),
+    font=dict(family="Helvetica", size=16),
     plot_bgcolor="white",
     paper_bgcolor="white",
     xaxis_title=None,
@@ -54,7 +54,7 @@ fig = px.scatter(
 )
 
 fig.update_layout(
-    font=dict(family="Helvetica", size=12),
+    font=dict(family="Helvetica", size=16),
     plot_bgcolor="white",
     paper_bgcolor="white",
     xaxis_title=None,
@@ -63,10 +63,10 @@ fig.update_layout(
 fig.update_xaxes(visible=False, showgrid=False, zeroline=False, showticklabels=False)
 fig.update_yaxes(visible=False, showgrid=False, zeroline=False, showticklabels=False)
 
-fig.update_traces(marker=dict(size=8), selector=dict(mode='markers'))
+fig.update_traces(marker=dict(size=10), selector=dict(mode='markers'))
 fig.update_layout(
     title="2D UMAP Embeddings Colored by Category",
     legend_title_text='Category'
 )
 fig.write_html("metaculus_topics.html", full_html=True, include_plotlyjs="cdn")
-fig.show()  
+fig.show() 
