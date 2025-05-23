@@ -1,0 +1,335 @@
+---
+title: "Kalshi Baseline Rate Extractor"
+author: "Your Name"
+format: html
+execute:
+    echo: true
+---
+
+# Data cleaning and explorer
+
+```{r}
+library(tidyverse)
+rerun = F
+
+data = read_csv('data/kalshi_panel.csv')
+
+# basic mutates
+if(rerun){
+data = data %>% 
+  mutate(
+    brier = (prob - resolution)^2,
+    weeks_to_resolution = week*-1
+    ) %>% 
+  group_by(ticker) %>%
+  # Must have more than one row of data
+  filter(n() > 1, week != 0) %>% 
+  mutate(
+    normalized_wtr = scales::rescale(weeks_to_resolution),
+    wtr_center = scale(weeks_to_resolution),
+    mean_brier = mean(brier),
+    sd_brier = sd(brier)
+  ) %>%
+  nest() %>%
+  ungroup() %>% 
+  # slice_sample(n = 10) %>% 
+  mutate(
+    lm_p = map(data, ~lm(prob ~ weeks_to_resolution, data = .)),
+    p = map(lm_p, broom::tidy),
+    lm_brier = map(data, ~lm(brier ~ weeks_to_resolution, data = .)),
+    brier = map(lm_brier, broom::tidy)
+  ) %>% 
+  select(-lm_p, -lm_brier) %>% 
+  pivot_longer(p:brier) %>% 
+  unnest(value) %>% 
+  select(-c(std.error:p.value)) %>% 
+  pivot_wider(names_from = c(term, name), values_from = estimate) %>% 
+  unnest(data)
+data %>% write_rds('mutated_data.rds')}
+data = read_rds('mutated_data.rds')
+# TO - DO
+# Select the tickers to analyze
+tickers = data %>% 
+  select(ticker, mean_brier, weeks_to_resolution_brier) %>% 
+  unique() %>% 
+  ungroup()
+  
+library(plotly)
+
+tickers %>%
+  mutate(
+    trend = ifelse(weeks_to_resolution_brier < 0, "Getting Better", "Getting Worse")
+  ) %>%
+  ggplot(aes(mean_brier, weeks_to_resolution_brier, color = trend, text = ticker)) +
+  geom_point() +
+  geom_vline(xintercept = mean(tickers$mean_brier, na.rm = TRUE), linetype = "dashed") +
+  annotate("text", x = mean(tickers$mean_brier, na.rm = TRUE), y = max(tickers$weeks_to_resolution_brier, na.rm = TRUE),
+           label = "Average", vjust = -0.5, hjust = -0.1, angle = 90, size = 3) +
+  annotate("text", x = mean(tickers$mean_brier, na.rm = TRUE) - 0.02, y = min(tickers$weeks_to_resolution_brier, na.rm = TRUE),
+           label = "Better than average", hjust = 1, vjust = 1.5, size = 3) +
+  annotate("text", x = mean(tickers$mean_brier, na.rm = TRUE) + 0.02, y = min(tickers$weeks_to_resolution_brier, na.rm = TRUE),
+           label = "Worse than average", hjust = 0, vjust = 1.5, size = 3) +
+  labs(
+    x = "Mean Brier Score",
+    y = "Slope of Brier vs. Weeks to Resolution (log scale)",
+    color = "Trend"
+  ) +
+  theme_minimal() -> p
+
+ggplotly(p, tooltip = "text")
+
+tickers %>% ggplot(aes(mean_brier)) + geom_histogram()
+tickers %>% ggplot(aes(weeks_to_resolution_brier)) + geom_histogram()
+
+filtered_tickers <- tickers %>% 
+  mutate(
+    high_mean = mean_brier > .50,
+    low_mean = mean_brier < .0003,
+    getting_better = weeks_to_resolution_brier < -.3,
+    getting_worse = weeks_to_resolution_brier > .3,
+    notchange = weeks_to_resolution_brier < .03 & weeks_to_resolution_brier > -.03
+  ) %>% 
+  mutate(category = case_when(
+    getting_better ~ "getting better",
+    getting_worse ~ 'getting_worse',
+    notchange & low_mean ~ 'flat_low',
+    notchange & high_mean ~ 'flat_high'
+  )) %>% 
+  filter(!is.na(category)) 
+
+filtered_tickers %>% count(category)
+
+# Filter main data for these tickers
+plot_data <- data %>% 
+  filter(ticker %in% filtered_tickers$ticker)
+
+# Plotly line plot
+library(plotly)
+
+p_line <- plot_data %>%
+  ggplot(aes(x = weeks_to_resolution, y = brier, color = category, group = ticker, text = ticker)) +
+  geom_line() +
+  labs(
+    x = "Weeks Until Resolution",
+    y = "Brier Score",
+    color = "category"
+  ) +
+  theme_minimal()
+
+ggplotly(p_line, tooltip = "text")
+```
+
+```{r}
+data %>% 
+  group_by(ticker) %>% 
+  mutate(
+    initial_brier = brier[which.min(weeks_to_resolution)],
+    final_brier = brier[which.max(weeks_to_resolution)]
+  ) %>% 
+  select(ticker, category, initial_brier, mean_brier, final_brier) %>% 
+  unique() %>% 
+  pivot_longer(initial_brier:final_brier) %>% 
+  mutate(name = factor(name, levels = c("initial_brier", "mean_brier", "final_brier"))) %>% 
+  group_by(category,name) %>% 
+  summarise(mean_se(value)) %>% 
+  ggplot(aes(x = name, y = y, color = category)) + 
+  geom_line(aes(group = category)) +
+  geom_ribbon(aes(ymin = y - ymin, ymax = y + ymax, fill = category, group = category), alpha = 0.2, color = NA) +
+  geom_point() +
+  theme_minimal() -> p
+
+ggplotly(p)
+```
+
+```{r}
+tickers %>%
+  left_join(data %>% select(ticker, category) %>% unique()) %>% 
+  group_by(category) %>% 
+  summarise(
+    mean_brier = mean(mean_brier),
+    weeks_to_resolution_brier = mean(weeks_to_resolution_brier, na.rm = T)
+  ) %>% 
+  mutate(
+    trend = ifelse(weeks_to_resolution_brier < 0, "Getting Better", "Getting Worse")
+  ) %>%
+  ggplot(aes(mean_brier, weeks_to_resolution_brier, color = trend, text = category)) +
+  geom_point() +
+  geom_vline(xintercept = mean(tickers$mean_brier, na.rm = TRUE), linetype = "dashed") +
+  annotate("text", x = mean(tickers$mean_brier, na.rm = TRUE), y = max(tickers$weeks_to_resolution_brier, na.rm = TRUE),
+           label = "Average", vjust = -0.5, hjust = -0.1, angle = 90, size = 3) +
+  annotate("text", x = mean(tickers$mean_brier, na.rm = TRUE) - 0.02, y = min(tickers$weeks_to_resolution_brier, na.rm = TRUE),
+           label = "Better than average", hjust = 1, vjust = 1.5, size = 3) +
+  annotate("text", x = mean(tickers$mean_brier, na.rm = TRUE) + 0.02, y = min(tickers$weeks_to_resolution_brier, na.rm = TRUE),
+           label = "Worse than average", hjust = 0, vjust = 1.5, size = 3) +
+  labs(
+    x = "Mean Brier Score",
+    y = "Slope of Brier vs. Weeks to Resolution (log scale)",
+    color = "Trend"
+  ) +
+  theme_minimal() -> p
+
+ggplotly(p, tooltip = "text")
+```
+
+
+
+```{r}
+
+library(arrow)
+read_parquet('data/kalshi_example3.parquet') %>% 
+t() %>% 
+as.data.frame() %>% 
+add_rownames() %>% 
+as_tibble() %>% 
+gt::gt()
+```
+
+```{r}
+library(tidyverse)   # dplyr, stringr, purrr, readr
+library(arrow)       # for read_parquet()
+
+parse_base_rates <- function(data_or_path) {
+  
+  # 1. bring in the data --------------------------------------------------------
+  df <- if (is.character(data_or_path)) {
+    arrow::read_parquet(data_or_path) %>% as_tibble()
+  } else as_tibble(data_or_path)
+  
+  # 2. identify base-rate columns ----------------------------------------------
+  base_cols <- names(df) %>% 
+    stringr::str_subset("__base_rate(s|$)|__selected_base_rate$")
+  if (!length(base_cols)) stop("No *_base_rate* columns found.")
+  
+  # 3. robust cell parser -------------------------------------------------------
+  parse_cell <- function(x) {
+    
+    # --- numeric scalar --------------------------------------------------------
+    if (is.numeric(x) && length(x) == 1) return(as.numeric(x))
+    
+    # --- numeric vector / list-column -----------------------------------------
+    if (is.numeric(x) && length(x) > 1)  return(median(x, na.rm = TRUE))
+    if (is.list(x)) {
+      flat <- unlist(x, use.names = FALSE)
+      flat <- suppressWarnings(as.numeric(flat))
+      flat <- flat[!is.na(flat)]
+      if (length(flat)) return(median(flat))
+      # fall through if nothing parseable
+    }
+    
+    # --- character -------------------------------------------------------------
+    if (is.character(x)) {
+      nums <- stringr::str_extract_all(x, "-?\\d*\\.?\\d+(e[+-]?\\d+)?")[[1]] %>% 
+              readr::parse_number(locale = readr::locale(decimal_mark = "."))
+      if (length(nums) == 1) return(nums)
+      if (length(nums) > 1) return(median(nums, na.rm = TRUE))
+    }
+    
+    # --- nothing parseable -----------------------------------------------------
+    NA_real_
+  }
+  
+  # 4. apply across -------------------------------------------------------------
+  df = df %>% mutate(across(all_of(base_cols), ~ purrr::map_dbl(.x, parse_cell)))
+
+  df %>% 
+    select(ticker, all_of(base_cols)) %>% 
+    pivot_longer(-ticker)
+
+}
+
+## ── example usage ─────────────────────────────────────────────────────────────
+parsed <- parse_base_rates("test.parquet")
+
+parsed
+```
+
+Now a function for the ggplot
+
+```{r}
+panel = read_csv('data/kalshi_panel.csv')
+
+briers = panel  %>% filter(ticker %in% parsed$ticker) %>% 
+  mutate(brier = (prob - resolution)^2)
+
+parsed %>% 
+  left_join(briers %>% slice(1)  %>%  select(ticker, resolution)) %>% 
+  mutate(value = (value-resolution)^2)
+
+p =  briers %>%
+    ggplot(aes(x = week, y = brier, color = ticker, group = ticker)) +
+    geom_line() +
+    geom_hline(data = parsed, aes(yintercept = value, linetype = name, color = ticker), show.legend = FALSE) +
+    labs(
+      x = "Week",
+      y = "Brier Score",
+      color = "Ticker",
+      linetype = "Base Rate"
+    ) +
+    theme_minimal()
+
+ggplotly(p)
+
+```
+
+```{r}
+# evals
+briers %>% 
+  filter(week != 0) %>% 
+  group_by(ticker) %>% 
+  summarise(
+    mean = mean(brier, na.rm = TRUE),
+    initial = brier[which.min(week)],
+    final = brier[which.max(week)],
+    median_week = 0 
+  )
+
+read_csv('data/kalshi_filtered.csv') %>% 
+  filter(str_detect(subtitle, "Tie|tie")) %>% 
+  gt::gt()
+
+read_csv('data/kalshi_filtered.csv') %>% filter(is.na(subtitle) & market_type != "binary")
+
+filter = read_csv('data/kalshi_filtered.csv')
+filter %>% select(open_time, close_time)
+```
+
+
+How many come online at each week.
+
+```{r}
+library(tidyverse)
+library(arrow)        # read_parquet()
+library(lubridate)    # isoweek(), isoyear()
+
+# ── 1. load panel ─────────────────────────────────────────────────────────────
+panel <- read_csv("data/kalshi_panel.csv") %>% 
+  mutate(
+    open_time  = as_date(open_time),
+    close_time = as_date(close_time)
+  )
+
+# ── 2. keep only events already closed ────────────────────────────────────────
+today <- Sys.Date()
+closed <- panel %>% filter(close_time < today)
+
+# ── 3. bucket into ISO-weeks (year-week label) ────────────────────────────────
+closed <- closed %>% 
+  mutate(iso_week = sprintf("%d-W%02d", isoyear(close_time), isoweek(close_time)))
+
+weekly_counts <- closed %>% 
+  count(iso_week, name = "n_datapoints") %>% 
+  arrange(iso_week)
+
+print(weekly_counts)
+
+mean(weekly_counts$n_datapoints)
+
+# ── 4. (optional) quick line plot ─────────────────────────────────────────────
+ggplot(weekly_counts, aes(x = iso_week, y = n_datapoints, group = 1)) +
+  geom_line(colour = "steelblue") +
+  geom_point() +
+  labs(x = "ISO week (close_time)", y = "Number of closed datapoints") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```

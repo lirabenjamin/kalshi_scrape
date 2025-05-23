@@ -1,0 +1,110 @@
+library(tidyverse)
+
+data = read_csv('data/kalshi_panel.csv')
+
+# basic mutates
+data = data %>% 
+  mutate(
+    brier = (prob - resolution)^2,
+    weeks_to_resolution = week*-1
+    ) %>% 
+  group_by(ticker) %>%
+  # Must have more than one row of data
+  filter(n() > 1, week != 0) %>% 
+  mutate(
+    normalized_wtr = scales::rescale(weeks_to_resolution),
+    wtr_center = scale(weeks_to_resolution),
+    mean_brier = mean(brier),
+    sd_brier = sd(brier)
+  ) %>%
+  nest() %>%
+  ungroup() %>% 
+  # slice_sample(n = 10) %>% 
+  mutate(
+    lm_p = map(data, ~lm(prob ~ weeks_to_resolution, data = .)),
+    p = map(lm_p, broom::tidy),
+    lm_brier = map(data, ~lm(brier ~ weeks_to_resolution, data = .)),
+    brier = map(lm_brier, broom::tidy)
+  ) %>% 
+  select(-lm_p, -lm_brier) %>% 
+  pivot_longer(p:brier) %>% 
+  unnest(value) %>% 
+  select(-c(std.error:p.value)) %>% 
+  pivot_wider(names_from = c(term, name), values_from = estimate) %>% 
+  unnest(data)
+
+# TO - DO
+# Select the tickers to analyze
+tickers = data %>% 
+  select(ticker, mean_brier, weeks_to_resolution_brier) %>% 
+  unique() %>% 
+  ungroup()
+  
+library(plotly)
+
+tickers %>%
+  mutate(
+    trend = ifelse(weeks_to_resolution_brier < 0, "Getting Better", "Getting Worse")
+  ) %>%
+  ggplot(aes(mean_brier, weeks_to_resolution_brier, color = trend, text = ticker)) +
+  geom_point() +
+  geom_vline(xintercept = mean(tickers$mean_brier, na.rm = TRUE), linetype = "dashed") +
+  annotate("text", x = mean(tickers$mean_brier, na.rm = TRUE), y = max(tickers$weeks_to_resolution_brier, na.rm = TRUE),
+           label = "Average", vjust = -0.5, hjust = -0.1, angle = 90, size = 3) +
+  annotate("text", x = mean(tickers$mean_brier, na.rm = TRUE) - 0.02, y = min(tickers$weeks_to_resolution_brier, na.rm = TRUE),
+           label = "Better than average", hjust = 1, vjust = 1.5, size = 3) +
+  annotate("text", x = mean(tickers$mean_brier, na.rm = TRUE) + 0.02, y = min(tickers$weeks_to_resolution_brier, na.rm = TRUE),
+           label = "Worse than average", hjust = 0, vjust = 1.5, size = 3) +
+  labs(
+    x = "Mean Brier Score",
+    y = "Slope of Brier vs. Weeks to Resolution (log scale)",
+    color = "Trend"
+  ) +
+  theme_minimal() -> p
+
+ggplotly(p, tooltip = "text")
+
+tickers %>% ggplot(aes(mean_brier)) + geom_histogram()+scale_x_log10()
+tickers %>% ggplot(aes(weeks_to_resolution_brier)) + geom_histogram()
+
+filtered_tickers <- tickers %>% 
+  mutate(
+    high_mean = mean_brier > .50,
+    low_mean = mean_brier < .0003,
+    getting_better = weeks_to_resolution_brier < -.3,
+    getting_worse = weeks_to_resolution_brier > .3,
+    notchange = weeks_to_resolution_brier < .03 & weeks_to_resolution_brier > -.03
+  ) %>% 
+  mutate(category = case_when(
+    getting_better ~ "getting better",
+    getting_worse ~ 'getting_worse',
+    notchange & low_mean ~ 'flat_low',
+    notchange & high_mean ~ 'flat_high'
+  )) %>% 
+  filter(!is.na(category)) %>% 
+  filter(category == 'flat_high')
+
+filtered_tickers %>% count(category)
+
+# Filter main data for these tickers
+plot_data <- data %>% 
+  filter(ticker %in% filtered_tickers$ticker)
+
+# Plotly line plot
+library(plotly)
+
+p_line <- plot_data %>%
+  ggplot(aes(x = weeks_to_resolution, y = brier, color = category, group = ticker, text = ticker)) +
+  geom_line() +
+  labs(
+    x = "Weeks Until Resolution",
+    y = "Brier Score",
+    color = "category"
+  ) +
+  theme_minimal()
+
+ggplotly(p_line, tooltip = "text")
+
+# Implement - or copy - the GPT function
+
+# Implement - or copy the plotting function
